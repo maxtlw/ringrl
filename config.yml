@@ -1,0 +1,19 @@
+model:
+  hidden_dim: 128
+runner:
+  starting_epsilon: 1.0
+  epsilon_decay_rate: 0.99999
+  epsilon_min: 0.01
+  warmup_buffer_size: 10_000
+  validate_every_episodes: 100
+  validation_episodes: 20
+  num_workers: 4
+trainer:
+  eta: 1e-3
+  gamma: 0.99
+  replay_buffer_size: 100_000
+  batch_size: 64
+  target_sync_every_steps: 5_000
+  save_checkpoint_every_steps: 10_000
+  update_actor_every_steps: 1_000
+  stacked_frames: 4
