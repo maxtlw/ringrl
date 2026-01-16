@@ -1,7 +1,6 @@
 import multiprocessing as mp
 from multiprocessing import Queue
 from multiprocessing.synchronize import Event as EventType
-from typing import Literal
 
 import gymnasium as gym
 import numpy as np
@@ -9,6 +8,7 @@ import torch
 
 from conv_qnet import QNet
 from logs import get_logger
+from params_store import SharedParamsStore
 from replay_ring import SharedReplayRing
 from utils import get_breakout_env, sample_action
 
@@ -20,22 +20,24 @@ class Runner:
         self,
         actor: QNet,
         replay_ring: SharedReplayRing,
-        updates_queue: Queue,
+        params_store: SharedParamsStore,
         initial_epsilon: float,
         epsilon_decay_rate: float,
         epsilon_min: float,
         validate_every_episodes: int,
         validation_episodes: int,
+        warmup_complete_signal: EventType,
         stacked_frames: int = 4,
     ):
         self.actor = actor
         self.replay_ring = replay_ring
-        self.updates_queue = updates_queue
+        self.params_store = params_store
         self.initial_epsilon = initial_epsilon
         self.epsilon_decay_rate = epsilon_decay_rate
         self.epsilon_min = epsilon_min
         self.validate_every_episodes = validate_every_episodes
         self.validation_episodes = validation_episodes
+        self.warmup_complete_signal = warmup_complete_signal
         self.stacked_frames = stacked_frames
 
         if not validate_every_episodes > validation_episodes:
@@ -45,43 +47,60 @@ class Runner:
 
         self.process_name = mp.current_process().name
 
+        self.tmp_cpu = torch.empty_like(self.params_store.shared)
+        self.current_actor_version = 0
+
     def run(self, metrics_queue: Queue):
+        process_rank = int(self.process_name.split("-")[-1])
+
         episode = 0
         while True:
+            if (
+                episode >= self.validation_episodes
+                and (episode % self.validate_every_episodes < self.validation_episodes)
+                and self.warmup_complete_signal.is_set()
+                and episode % (process_rank + 1) == 0  # only validate on one worker
+            ):
+                subset = "val"
+                epsilon = 0.01
+            else:
+                subset = "train"
+                epsilon = max(
+                    self.epsilon_min,
+                    (self.epsilon_decay_rate**episode) * self.initial_epsilon,
+                )
+
             self._maybe_update_actor()
 
             env = get_breakout_env(stacked_frames=self.stacked_frames)
-
-            epsilon = max(
-                self.epsilon_min,
-                (self.epsilon_decay_rate**episode) * self.initial_epsilon,
-            )
 
             self._rollout_episode(
                 env=env,
                 actor=self.actor,
                 epsilon=epsilon,
-                subset="train",
+                subset=subset,
                 episode=episode,
                 metrics_queue=metrics_queue,
             )
-            _LOGGER.info(f"🏃 [{self.process_name}] Episode {episode}")
+            _LOGGER.debug(f"🏃 [{self.process_name}] Episode {episode}")
 
             episode += 1
 
     def _maybe_update_actor(self):
-        if self.updates_queue.empty():
-            return
-        _LOGGER.debug("Updating actor")
-        self.actor.load_state_dict(self.updates_queue.get())
-        _LOGGER.debug("Updated actor")
+        if (
+            self.params_store.version.value % 2 == 0
+            and self.params_store.version.value > self.current_actor_version
+        ):
+            self.params_store.read_into(self.tmp_cpu)
+            torch.nn.utils.vector_to_parameters(self.tmp_cpu, self.actor.parameters())
+            self.current_actor_version = self.params_store.version.value
 
     def _rollout_episode(
         self,
         env: gym.Env,
         actor: QNet,
         epsilon: float,
-        subset: Literal["train", "val"],
+        subset: str,
         episode: int,
         metrics_queue: Queue,
     ):
@@ -141,5 +160,14 @@ class Runner:
                 "value": epsilon,
                 "step": episode,
                 "context": {"subset": subset, "worker": self.process_name},
+            }
+        )
+        metrics_queue.put(
+            {
+                "type": "track",
+                "name": "actor_version",
+                "value": self.current_actor_version,
+                "step": episode,
+                "context": {"worker": self.process_name},
             }
         )

@@ -14,11 +14,6 @@ class RunnerConfig(BaseModel):
         description="Rate at which epsilon decays, epsilon = starting_epsilon * epsilon_decay_rate^episode",
     )
     epsilon_min: float = Field(default=0.01, ge=0.0, le=1.0)
-    warmup_buffer_size: int = Field(
-        default=10_000,
-        ge=1,
-        description="Number of transitions to collect before training starts, to warm up the replay buffer",
-    )
     validate_every_episodes: int = Field(
         default=100, ge=1, description="Number of episodes between validation runs"
     )
@@ -31,7 +26,6 @@ class RunnerConfig(BaseModel):
 class TrainerConfig(BaseModel):
     eta: float = Field(default=1e-3, ge=0.0)
     gamma: float = Field(default=0.99, ge=0.0, le=1.0)
-    replay_buffer_size: int = Field(default=100_000, ge=1)
     batch_size: int = Field(default=64, ge=1)
     target_sync_every_steps: int = Field(
         default=5_000,
@@ -52,6 +46,12 @@ class TrainerConfig(BaseModel):
 
 
 class Config(BaseModel):
+    replay_buffer_size: int = Field(default=100_000, ge=1)
+    replay_buffer_warmup_size: int = Field(
+        default=10_000,
+        ge=1,
+        description="Number of transitions to collect before training starts, to warm up the replay buffer",
+    )
     model: ModelConfig
     runner: RunnerConfig
     trainer: TrainerConfig

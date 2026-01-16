@@ -178,32 +178,39 @@ class SharedReplayRing:
         Reads a batch of indices. Retries individual slots if writer overlaps.
         Returns copies (safe) for obs/next_obs; scalars are copied too.
         """
-        B = int(idxs.shape[0])
-        obs = np.empty((B, *self.obs_shape), dtype=np.uint8)
-        next_obs = np.empty((B, *self.obs_shape), dtype=np.uint8)
-        act = np.empty((B,), dtype=np.int64)
-        rew = np.empty((B,), dtype=np.float32)
-        terminated = np.empty((B,), dtype=np.uint8)
-        truncated = np.empty((B,), dtype=np.uint8)
+        idxs = np.asarray(idxs, dtype=np.int64)
 
-        for j, i in enumerate(idxs.tolist()):
+        # Bulk snapshot
+        s1 = self.seq[idxs].copy()
+
+        obs = self.obs[idxs].copy()
+        next_obs = self.next_obs[idxs].copy()
+        act = self.act[idxs].copy()
+        rew = self.rew[idxs].copy()
+        terminated = self.terminated[idxs].copy()
+        truncated = self.truncated[idxs].copy()
+
+        s2 = self.seq[idxs].copy()
+
+        bad = (s1 != s2) | (s1 & 1) != 0
+        bad_js = bad.nonzero()[0]
+
+        # + repair only the few bad slots
+        for j in bad_js:
+            i = int(idxs[j])
             for _ in range(max_spins):
-                s1 = int(self.seq[i])
-                if (s1 & 1) != 0:
-                    continue  # writer in progress
-                # read
+                t1 = int(self.seq[i])
+                if (t1 & 1) != 0:
+                    continue
                 obs[j] = self.obs[i]
                 next_obs[j] = self.next_obs[i]
                 act[j] = self.act[i]
                 rew[j] = self.rew[i]
                 terminated[j] = self.terminated[i]
                 truncated[j] = self.truncated[i]
-                s2 = int(self.seq[i])
-                if s1 == s2 and (s2 & 1) == 0:
+                t2 = int(self.seq[i])
+                if t1 == t2 and (t2 & 1) == 0:
                     break
-            else:
-                # As a fallback, just take what we got (rare). Or resample.
-                pass
 
         return (
             obs,

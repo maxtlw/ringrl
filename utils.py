@@ -39,6 +39,23 @@ class UTDCalculator:
         }
 
 
+class FireResetEnv(gym.Wrapper):
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+
+        # In Breakout, action 1 is usually FIRE in minimal action set,
+        # but verify with env.unwrapped.get_action_meanings()
+        obs, _, terminated, truncated, info = self.env.step(1)
+        if terminated or truncated:
+            obs, info = self.env.reset(**kwargs)
+
+        obs, _, terminated, truncated, info = self.env.step(1)
+        if terminated or truncated:
+            obs, info = self.env.reset(**kwargs)
+
+        return obs, info
+
+
 def sample_action(
     q_values: torch.Tensor,
     epsilon: float,
@@ -56,11 +73,12 @@ def get_breakout_env(stacked_frames: int = 4):
     env = AtariPreprocessing(
         env,
         noop_max=30,
-        frame_skip=stacked_frames,
+        frame_skip=4,
         screen_size=84,
         terminal_on_life_loss=True,
         grayscale_obs=True,
         grayscale_newaxis=False,
     )
+    env = FireResetEnv(env)  # this is enough because `terminal_on_life_loss=True`
     env = FrameStackObservation(env, stacked_frames)
     return env
