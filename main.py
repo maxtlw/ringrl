@@ -16,7 +16,7 @@ from aim import Distribution, Run
 from yaml import FullLoader, load
 
 from config import Config
-from conv_qnet import QNet
+from convnet import DQN
 from params_store import SharedParamsStore
 from replay_ring import SharedReplayRing
 from runner import Runner
@@ -28,11 +28,10 @@ random.seed(42)
 
 
 def _runner_worker(
-    actor_network: QNet,
+    actor_network: DQN,
     params_store: SharedParamsStore,
     replay_ring_handles: dict,
     replay_ring_write_pos: Synchronized,
-    replay_ring_lock: LockType,
     metrics_queue: Queue,
     warmup_complete_signal: EventType,
     config: Config,
@@ -40,7 +39,6 @@ def _runner_worker(
     replay_ring = SharedReplayRing.attach(
         handles=replay_ring_handles,
         write_pos=replay_ring_write_pos,
-        lock=replay_ring_lock,
     )
 
     actor_network = deepcopy(actor_network)
@@ -68,7 +66,6 @@ def _trainer_worker(
     params_store: SharedParamsStore,
     replay_ring_handles: dict,
     replay_ring_write_pos: Synchronized,
-    replay_ring_lock: LockType,
     metrics_queue: Queue,
     warmup_complete_signal: EventType,
     config: Config,
@@ -78,12 +75,10 @@ def _trainer_worker(
     replay_ring = SharedReplayRing.attach(
         handles=replay_ring_handles,
         write_pos=replay_ring_write_pos,
-        lock=replay_ring_lock,
     )
 
-    base_network = QNet(
+    base_network = DQN(
         observations_channels=config.trainer.stacked_frames,
-        hidden_dim=config.model.hidden_dim,
         action_space_dim=4,
     )
 
@@ -127,9 +122,8 @@ if __name__ == "__main__":
         "batch_size": config.trainer.batch_size,
     }
 
-    base_network = QNet(
+    base_network = DQN(
         observations_channels=config.trainer.stacked_frames,
-        hidden_dim=config.model.hidden_dim,
         action_space_dim=4,
     )
 
@@ -137,8 +131,7 @@ if __name__ == "__main__":
         capacity=config.replay_buffer_size,
         obs_shape=(config.trainer.stacked_frames, 84, 84),
     )
-    replay_ring_write_pos = mp.Value("q", 0)  # int64
-    replay_ring_lock = mp.Lock()  # coarse lock, simple and safe
+    replay_ring_write_pos = mp.Value("q", 0, lock=True)  # int64
 
     params_store = SharedParamsStore(model=base_network)
 
@@ -157,7 +150,6 @@ if __name__ == "__main__":
                 params_store,
                 replay_ring.export_handles(),
                 replay_ring_write_pos,
-                replay_ring_lock,
                 metrics_queue,
                 warmup_complete_signal,
                 config,
@@ -173,7 +165,6 @@ if __name__ == "__main__":
             params_store,
             replay_ring.export_handles(),
             replay_ring_write_pos,
-            replay_ring_lock,
             metrics_queue,
             warmup_complete_signal,
             config,
@@ -200,14 +191,12 @@ if __name__ == "__main__":
                         current_gradient_steps=global_gradient_steps.value,
                     )
 
-            # Periodic system metrics (don't tie these to queue traffic).
             now = time.time()
             if now - last_track_time >= 5.0:
                 run.track(
                     min(replay_ring_write_pos.value, replay_ring.capacity),
                     name="replay_buffer_size",
                     step=replay_ring_write_pos.value,
-                    context={"subset": "train"},
                 )
 
                 if utd_calculator is not None:
@@ -219,19 +208,18 @@ if __name__ == "__main__":
                         utd["utd"],
                         name="utd",
                         step=global_gradient_steps.value,
-                        context={"subset": "train"},
                     )
                     run.track(
                         utd["gradient_steps_per_second"],
                         name="steps_per_second",
                         step=global_gradient_steps.value,
-                        context={"subset": "train", "type": "gradient"},
+                        context={"type": "gradient"},
                     )
                     run.track(
                         utd["transitions_per_second"],
                         name="steps_per_second",
                         step=global_gradient_steps.value,
-                        context={"subset": "train", "type": "transitions"},
+                        context={"type": "transitions"},
                     )
 
                 last_track_time = now

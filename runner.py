@@ -6,7 +6,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-from conv_qnet import QNet
+from convnet import DQN
 from logs import get_logger
 from params_store import SharedParamsStore
 from replay_ring import SharedReplayRing
@@ -18,7 +18,7 @@ _LOGGER = get_logger(__name__)
 class Runner:
     def __init__(
         self,
-        actor: QNet,
+        actor: DQN,
         replay_ring: SharedReplayRing,
         params_store: SharedParamsStore,
         initial_epsilon: float,
@@ -98,7 +98,7 @@ class Runner:
     def _rollout_episode(
         self,
         env: gym.Env,
-        actor: QNet,
+        actor: DQN,
         epsilon: float,
         subset: str,
         episode: int,
@@ -138,28 +138,19 @@ class Runner:
         metrics_queue.put(
             {
                 "type": "track",
-                "name": "episode_return",
+                "name": f"{subset}_episode_return",
                 "value": episode_return,
                 "step": episode,
-                "context": {"subset": subset, "worker": self.process_name},
+                "context": {"worker": self.process_name},
             }
         )
         metrics_queue.put(
             {
                 "type": "track",
-                "name": "episode_length",
+                "name": f"{subset}_episode_length",
                 "value": episode_length,
                 "step": episode,
-                "context": {"subset": subset, "worker": self.process_name},
-            }
-        )
-        metrics_queue.put(
-            {
-                "type": "track",
-                "name": "epsilon",
-                "value": epsilon,
-                "step": episode,
-                "context": {"subset": subset, "worker": self.process_name},
+                "context": {"worker": self.process_name},
             }
         )
         metrics_queue.put(
@@ -171,3 +162,14 @@ class Runner:
                 "context": {"worker": self.process_name},
             }
         )
+
+        if subset == "train":
+            metrics_queue.put(
+                {
+                    "type": "track",
+                    "name": "epsilon",
+                    "value": epsilon,
+                    "step": episode,
+                    "context": {"worker": self.process_name},
+                }
+            )

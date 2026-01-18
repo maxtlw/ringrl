@@ -9,7 +9,7 @@ import torch
 from torch.nn.functional import huber_loss
 from torch.optim import Optimizer
 
-from conv_qnet import QNet
+from convnet import DQN
 from logs import get_logger
 from params_store import SharedParamsStore
 from replay_ring import SharedReplayRing
@@ -20,7 +20,7 @@ _LOGGER = get_logger(__name__)
 class Trainer:
     def __init__(
         self,
-        network: QNet,
+        network: DQN,
         replay_ring: SharedReplayRing,
         params_store: SharedParamsStore,
         batch_size: int,
@@ -63,8 +63,7 @@ class Trainer:
         self.warmup_complete_signal.wait()
 
         optimizer = torch.optim.Adam(
-            self.network.parameters(),
-            lr=eta,
+            self.network.parameters(), lr=eta, betas=(0.9, 0.999), eps=0.00015
         )
 
         if self.device.type == "cuda":
@@ -83,7 +82,7 @@ class Trainer:
                 self.gradient_steps > 0
                 and self.gradient_steps % self.target_sync_every_steps == 0
             ):
-                _LOGGER.info("🔄 Syncing target actor")
+                _LOGGER.info(f"🔄 Syncing target network (step: {self.gradient_steps})")
                 self.target_network.load_state_dict(self.network.state_dict())
 
             # Train one step
@@ -95,10 +94,10 @@ class Trainer:
             )
 
             # Save checkpoint if necessary
-            if (
-                self.gradient_steps > 0
-                and self.gradient_steps % self.save_checkpoint_every_steps == 0
+            if self.gradient_steps > 0 and (
+                self.gradient_steps % self.save_checkpoint_every_steps == 0
             ):
+                _LOGGER.info(f"💾 Saving checkpoint (step: {self.gradient_steps})")
                 torch.save(
                     self.network.state_dict(),
                     self.checkpoints_path / f"checkpoint_{self.gradient_steps}.pth",
@@ -109,6 +108,9 @@ class Trainer:
                 self.gradient_steps > 0
                 and self.gradient_steps % self.update_actor_every_steps == 0
             ):
+                _LOGGER.info(
+                    f"🔄 Publishing actor parameters to shared memory (step: {self.gradient_steps})"
+                )
                 self.params_store.publish(self.network)
 
             self.gradient_steps += 1
@@ -140,34 +142,33 @@ class Trainer:
             truncated_batch,
         ) = self.replay_ring.read_batch_safe(idxs)
 
-        terminated_t = torch.from_numpy(terminated_batch).to(
-            self.device, dtype=torch.bool
-        )
-        truncated_t = torch.from_numpy(truncated_batch).to(
-            self.device, dtype=torch.bool
-        )
-        done_t = terminated_t | truncated_t
+        terminated_t = torch.from_numpy(terminated_batch)
+        truncated_t = torch.from_numpy(truncated_batch)
+        done_t = (terminated_t | truncated_t).to(self.device).bool()
         rew_t = torch.from_numpy(rew_batch).to(self.device)
 
         with torch.no_grad():
-            next_obs_t = torch.from_numpy(next_obs_batch).to(
-                self.device, dtype=torch.float32
-            )
-            q_values_next = self.target_network(next_obs_t)
-            q_values_next_max = torch.max(q_values_next, dim=1).values
-            targets = rew_t + gamma * (~done_t).float() * q_values_next_max
+            next_obs_t = torch.from_numpy(next_obs_batch).to(self.device).float()
+            next_action = self.network(next_obs_t).argmax(dim=1, keepdim=True)
+            next_q = self.target_network(next_obs_t).gather(1, next_action).squeeze(1)
+            targets = rew_t + gamma * (~done_t).float() * next_q
 
-        obs_t = torch.from_numpy(obs_batch).to(self.device, dtype=torch.float32)
-        act_t = torch.from_numpy(act_batch).to(self.device, dtype=torch.int64)
+        obs_t = torch.from_numpy(obs_batch).to(self.device).float()
+        act_t = torch.from_numpy(act_batch).to(self.device).long()
 
         if scaler is not None:
-            with torch.autocast("cuda", dtype=torch.float16):
+            with torch.autocast(self.device.type, dtype=torch.float16):
                 q_values = self.network(obs_t)
                 q_values_actions = torch.gather(
                     q_values, 1, act_t.unsqueeze(1)
                 ).squeeze(1)
                 loss = huber_loss(q_values_actions, targets)
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    self.network.parameters(),
+                    max_norm=10.0,
+                )
                 scaler.step(optimizer)
                 scaler.update()
         else:
@@ -175,6 +176,10 @@ class Trainer:
             q_values_actions = torch.gather(q_values, 1, act_t.unsqueeze(1)).squeeze(1)
             loss = huber_loss(q_values_actions, targets)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.network.parameters(),
+                max_norm=10.0,
+            )
             optimizer.step()
 
         if self.gradient_steps % self.update_metrics_every_steps == 0:

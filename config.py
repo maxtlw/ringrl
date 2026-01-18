@@ -1,14 +1,10 @@
 from pydantic import BaseModel, Field
 
 
-class ModelConfig(BaseModel):
-    hidden_dim: int = Field(default=128, ge=1)
-
-
 class RunnerConfig(BaseModel):
     starting_epsilon: float = Field(default=1.0, ge=0.0, le=1.0)
     epsilon_decay_rate: float = Field(
-        default=0.99999,  # 1 - 1e-5
+        default=0.9999,  # 1 - 1e-4
         ge=0.0,
         le=1.0,
         description="Rate at which epsilon decays, epsilon = starting_epsilon * epsilon_decay_rate^episode",
@@ -52,6 +48,5 @@ class Config(BaseModel):
         ge=1,
         description="Number of transitions to collect before training starts, to warm up the replay buffer",
     )
-    model: ModelConfig
     runner: RunnerConfig
     trainer: TrainerConfig

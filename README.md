@@ -70,3 +70,7 @@ uv run python main.py
 ```bash
 uv run aim up
 ```
+
+## 🗒️ References
+* Mnih et al., *Playing Atari with Deep Reinforcement Learning*, 2013 [[paper](https://arxiv.org/abs/1312.5602)]
+* van Hasselt tt al., *Deep Reinforcement Learning with Double Q-Learning*, 2015 [[paper](https://arxiv.org/abs/1509.06461)]

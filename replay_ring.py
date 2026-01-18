@@ -17,7 +17,6 @@ class SharedReplayRing:
 
     # Set on `attach(...)` (and shared between processes)
     write_pos: Synchronized
-    lock: LockType
 
     def __init__(self, capacity: int, obs_shape: tuple[int, int, int] = (4, 84, 84)):
         self.capacity = capacity
@@ -94,7 +93,7 @@ class SharedReplayRing:
         }
 
     @staticmethod
-    def attach(handles: dict, write_pos: Synchronized, lock: LockType):
+    def attach(handles: dict, write_pos: Synchronized):
         obj = object.__new__(SharedReplayRing)
         obj.capacity = int(handles["capacity"])
         obj.obs_shape = tuple(handles["obs_shape"])
@@ -109,7 +108,6 @@ class SharedReplayRing:
 
         obj._build_views()
         obj.write_pos = write_pos
-        obj.lock = lock
         return obj
 
     def close_and_unlink(self):
@@ -152,7 +150,7 @@ class SharedReplayRing:
         obs_u8 = np.ascontiguousarray(obs_u8, dtype=np.uint8)
         next_obs_u8 = np.ascontiguousarray(next_obs_u8, dtype=np.uint8)
 
-        with self.lock:
+        with self.write_pos.get_lock():
             i = int(self.write_pos.value % self.capacity)
             self.write_pos.value += 1
 

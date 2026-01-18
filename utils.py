@@ -1,9 +1,15 @@
 import random
 import time
+from typing import SupportsFloat
 
 import gymnasium as gym
+import numpy as np
 import torch
-from gymnasium.wrappers import AtariPreprocessing, FrameStackObservation
+from gymnasium.wrappers import (
+    AtariPreprocessing,
+    FrameStackObservation,
+    TransformReward,
+)
 
 
 class UTDCalculator:
@@ -68,6 +74,10 @@ def sample_action(
     return action
 
 
+def _clip_reward(reward: float) -> float:
+    return np.clip(reward, -1.0, 1.0)
+
+
 def get_breakout_env(stacked_frames: int = 4):
     env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0.0)
     env = AtariPreprocessing(
@@ -81,4 +91,5 @@ def get_breakout_env(stacked_frames: int = 4):
     )
     env = FireResetEnv(env)  # this is enough because `terminal_on_life_loss=True`
     env = FrameStackObservation(env, stacked_frames)
+    env = TransformReward(env, _clip_reward)  # type: ignore
     return env
